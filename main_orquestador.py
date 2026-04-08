@@ -9,8 +9,9 @@ import os
 import sys
 import time
 import threading
-import msvcrt  
+import msvcrt
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from binance.client import Client
 from dotenv import load_dotenv
@@ -37,7 +38,8 @@ if not API_KEY or not API_SECRET:
 
 # --- RUTAS ESTRICTAS ---
 project_root = os.path.dirname(os.path.abspath(__file__))
-carpetas_deptos = ["dep_herramientas", "dep_analisis", "dep_ejecucion", "dep_salud"]
+carpetas_deptos = ["dep_herramientas", "dep_analisis", "dep_ejecucion",
+                    "dep_salud", "dep_control", "dep_registro"]
 for carpeta in carpetas_deptos:
     ruta_completa = os.path.join(project_root, carpeta)
     if os.path.exists(ruta_completa):
@@ -56,7 +58,13 @@ try:
     from auditor_red import AuditorRed
     from monitor_recursos import MonitorRecursos
     from controlador_telegram import ControladorTelegram
+    from notificador_telegram import NotificadorTelegram
     from reporte_diagnostico import ReporteDiagnostico
+    # --- Pilares 1, 2 y 3 ---
+    from dep_registro import GestorRegistro, GestorPendientes
+    from coordinador_reintentos import CoordinadorReintentos
+    from modificador_ordenes_seguro import ModificadorOrdenesSeguro
+    from trailing_stop_dinamico import ControladorDinamico
 except ImportError as e:
     print(f"❌ Error de Importación: {e}")
     sys.exit(1)
@@ -84,6 +92,12 @@ class OrquestadorCentral:
         # --- MEMORIA CACHÉ (NUEVO SISTEMA DUAL TRACK) ---
         self.cache_mtf = {}
         self.ultimo_update_mtf = 0
+        # Cache de la vela 1m: la vela cierra cada 60s, refrescamos cada 20s
+        self.cache_1m = None
+        self.ultimo_update_1m = 0
+        self.intervalo_1m_seg = 20
+        # Pool reutilizable para fetches MTF en paralelo
+        self._mtf_pool = ThreadPoolExecutor(max_workers=5, thread_name_prefix="mtf")
         
         self.config_estrategias = {
             "VIP_ADN": True,         
@@ -121,7 +135,34 @@ class OrquestadorCentral:
         
         # INICIALIZACIÓN DE LA NUEVA BITÁCORA DE 3 REPORTES
         self.bitacora = BitacoraCentral()
-        
+
+        # --- PILAR 1: REGISTRO SQLITE LOCAL (fuente de verdad) ---
+        self.registro = GestorRegistro()
+        # --- TELEGRAM SALIENTE (notificaciones de pendientes/escalados) ---
+        self.notificador = NotificadorTelegram()
+
+        # Contador de ciclos del motor: usado por coordinador y gestor de pendientes
+        self._ciclo_actual = 0
+        # Marca de la ultima sincronizacion contra Binance (segs unix)
+        self._ultima_sync_binance = 0.0
+        # Cada cuantos segundos validamos contra Binance (Pilar 1)
+        self.intervalo_sync_binance_seg = 120
+
+        # --- PILAR 2: COORDINADOR DE REINTENTOS PROGRESIVOS ---
+        self.coordinador = CoordinadorReintentos(
+            gestor_registro=self.registro,
+            notificador_telegram=self.notificador,
+            bitacora=self.bitacora,
+            obtener_ciclo_actual=lambda: self._ciclo_actual,
+        )
+
+        # --- GESTOR DE PROCESOS PENDIENTES (Pilar 2) ---
+        self.gestor_pendientes = GestorPendientes(
+            gestor_registro=self.registro,
+            notificador_telegram=self.notificador,
+            bitacora=self.bitacora,
+        )
+
         self.conexion = ConexionWrapper(API_KEY, API_SECRET, testnet=True)
         self.auditor = AuditorRed(self.conexion, self.bitacora)
         self.monitor_hw = MonitorRecursos(self.bitacora)
@@ -131,11 +172,28 @@ class OrquestadorCentral:
         self.emisor = EmisorSenales()
         self.gestor = GestorCupos()
         self.evaluador = EvaluadorEntradas(self.gestor)
-        self.disparador = DisparadorBinance(self.conexion)
-        self.asegurador = AseguradorPosicion(self.conexion, self.disparador)
+        self.disparador = DisparadorBinance(
+            self.conexion, coordinador=self.coordinador,
+            gestor_registro=self.registro, bitacora=self.bitacora,
+        )
+        self.asegurador = AseguradorPosicion(
+            self.conexion, self.disparador, coordinador=self.coordinador,
+            gestor_registro=self.registro, bitacora=self.bitacora,
+        )
+
+        # --- PILAR 3: MODIFICADOR SEGURO Y CONTROLADOR DE TRAILING ---
+        self.modificador_seguro = ModificadorOrdenesSeguro(
+            self.conexion, self.coordinador, self.registro, bitacora=self.bitacora,
+        )
+        self.controlador_trailing = ControladorDinamico(
+            self.conexion, self.disparador, self.gestor,
+            gestor_registro=self.registro,
+            modificador_seguro=self.modificador_seguro,
+            bitacora=self.bitacora,
+        )
 
         # RIESGO INSTITUCIONAL: 5% del balance por operación (calculado vs Stop Loss)
-        self.porcentaje_riesgo = 0.05 
+        self.porcentaje_riesgo = 0.05
 
         self.bitacora.registrar_actividad("Main_Orquestador", "Módulos instanciados y variables de estado cargadas.")
 
@@ -144,7 +202,17 @@ class OrquestadorCentral:
         texto = f"[{hora}] {mensaje}"
         print(texto)
 
-    def actualizar_balance(self, es_inicio=False):
+    def actualizar_balance(self, es_inicio=False, forzar=False):
+        """
+        PILAR 1: lee del snapshot SQLite. Solo va a Binance al inicio o cuando
+        han pasado intervalo_sync_binance_seg desde la ultima sincronizacion.
+        """
+        if not es_inicio and not forzar:
+            snap = self.registro.obtener_ultimo_snapshot()
+            if snap is not None:
+                self.estado_ui['balance_actual'] = float(snap['balance_usdt'])
+                return
+
         try:
             balances = self.conexion.client.futures_account_balance()
             for b in balances:
@@ -153,11 +221,59 @@ class OrquestadorCentral:
                     self.estado_ui['balance_actual'] = saldo
                     if es_inicio:
                         self.estado_ui['balance_inicial'] = saldo
+                    # Persistir snapshot en SQLite
+                    try:
+                        self.registro.guardar_snapshot_cuenta(saldo)
+                    except Exception:
+                        pass
                     return
         except Exception as e:
             self.bitacora.registrar_error("Conexión Binance", f"Error actualizando balance: {str(e)}")
 
     def actualizar_posiciones_en_vivo(self):
+        """
+        PILAR 1: construye la UI desde el registro SQLite.
+        La validacion contra Binance ocurre en sincronizar_con_binance() cada 120s.
+        """
+        try:
+            posiciones_local = self.registro.obtener_posiciones_abiertas(self.symbol)
+            nuevas_pos_ui = []
+            for pos in posiciones_local:
+                ordenes_sl = self.registro.obtener_ordenes_proteccion(
+                    self.symbol, pos['direccion'], 'SL'
+                )
+                ordenes_tp = self.registro.obtener_ordenes_proteccion(
+                    self.symbol, pos['direccion'], 'TP'
+                )
+                sl = float(ordenes_sl[-1]['precio']) if ordenes_sl else "N/A"
+                tp = float(ordenes_tp[-1]['precio']) if ordenes_tp else "N/A"
+                ids = []
+                if ordenes_sl and ordenes_sl[-1].get('id_orden_binance'):
+                    ids.append(str(ordenes_sl[-1]['id_orden_binance'])[-5:])
+                if ordenes_tp and ordenes_tp[-1].get('id_orden_binance'):
+                    ids.append(str(ordenes_tp[-1]['id_orden_binance'])[-5:])
+                id_mostrar = "-".join(ids) if ids else "Sin Órdenes"
+
+                nuevas_pos_ui.append({
+                    "symbol": pos['symbol'],
+                    "side": pos['direccion'],
+                    "cantidad": abs(float(pos['cantidad'])),
+                    "entry_price": float(pos['precio_entrada']),
+                    "sl": sl,
+                    "tp": tp,
+                    "be": "N/A",
+                    "order_id": id_mostrar,
+                    "protegida": False,
+                })
+            self.estado_ui["posiciones_activas"] = nuevas_pos_ui
+        except Exception as e:
+            self.bitacora.registrar_error("Estado Local", f"Fallo al leer registro local: {e}")
+
+    def _construir_ui_legacy(self):
+        """
+        Funcion legacy original que consultaba Binance directamente.
+        Se mantiene como referencia y se invoca en sincronizar_con_binance().
+        """
         try:
             posiciones = self.conexion.client.futures_position_information(symbol=self.symbol)
             vivas = [p for p in posiciones if float(p['positionAmt']) != 0]
@@ -215,6 +331,28 @@ class OrquestadorCentral:
             with open("sentinel_debug.log", "a", encoding="utf-8") as f:
                 f.write(f"\n[{datetime.now()}] ERROR LEYENDO POSICIONES API:\n{traceback.format_exc()}\n")
 
+    def sincronizar_con_binance(self):
+        """
+        PILAR 1: Validacion periodica contra Binance. Refresca el snapshot de
+        cuenta y, si difiere, reconstruye la UI desde el exchange.
+
+        Se llama solo cada `intervalo_sync_binance_seg` segundos para reducir
+        la presion sobre la API a ~30 llamadas/min en lugar de ~200/min.
+        """
+        ahora = time.time()
+        if ahora - self._ultima_sync_binance < self.intervalo_sync_binance_seg:
+            return
+        self._ultima_sync_binance = ahora
+
+        # 1) Snapshot de balance (forzando lectura real a Binance)
+        self.actualizar_balance(forzar=True)
+
+        # 2) Validacion de posiciones contra Binance (legacy)
+        try:
+            self._construir_ui_legacy()
+        except Exception as e:
+            self.bitacora.registrar_error("Sync Binance", f"Validacion fallo: {e}")
+
     def obtener_valor_seguro(self, df, columna, posicion):
         return df[columna].iloc[posicion] if columna in df.columns else 0.0
 
@@ -266,16 +404,29 @@ class OrquestadorCentral:
 
     def ejecutar_panico_nuclear(self):
         try:
-            self.conexion.client.futures_cancel_all_open_orders(symbol=self.symbol)
+            # Pilar 2: cancelacion atomica con coordinador
+            self.coordinador.ejecutar(
+                accion=lambda: self.conexion.client.futures_cancel_all_open_orders(symbol=self.symbol),
+                tipo_accion="CANCELAR_TODO",
+                parametros_pendiente={"symbol": self.symbol},
+            )
+            # Para conocer posiciones a cerrar, sincronizamos con Binance una vez
             posiciones = self.conexion.client.futures_position_information(symbol=self.symbol)
             for pos in posiciones:
                 amt = float(pos['positionAmt'])
                 if amt != 0:
                     side_salida = "SELL" if amt > 0 else "BUY"
-                    pos_side = pos['positionSide'] 
-                    self.conexion.client.futures_create_order(
-                        symbol=self.symbol, side=side_salida, positionSide=pos_side,
-                        type="MARKET", quantity=abs(amt)
+                    pos_side = pos['positionSide']
+                    self.coordinador.ejecutar(
+                        accion=lambda s=side_salida, ps=pos_side, q=abs(amt): self.conexion.client.futures_create_order(
+                            symbol=self.symbol, side=s, positionSide=ps,
+                            type="MARKET", quantity=q
+                        ),
+                        tipo_accion="CERRAR_POSICION",
+                        parametros_pendiente={
+                            "symbol": self.symbol, "direccion": pos_side,
+                            "cantidad": abs(amt), "precio": "MARKET",
+                        },
                     )
                     self.bitacora.registrar_operacion("CERRAR_POSICION", self.symbol, side_salida, abs(amt), 0.0, "Cierre de Pánico")
             self.log_ui("☢️ POSICIONES LIQUIDADAS. El bot está inactivo.")
@@ -283,25 +434,46 @@ class OrquestadorCentral:
             self.log_ui(f"❌ FALLO CRÍTICO EN KILLSWITCH: {e}")
             self.bitacora.registrar_error("Main_Orquestador", f"Fallo en Pánico Nuclear: {str(e)}")
 
+    def _fetch_mtf_tf(self, tf, rsi_period):
+        """Fetch + indicadores de un timeframe. Usado por el ThreadPoolExecutor."""
+        velas = self.monitor.obtener_velas(self.symbol, tf)
+        return tf, self.monitor.calcular_indicadores(velas, rsi_period)
+
     def ciclo_analisis(self):
         adn = self.comparador.adn['parametros']
         ahora = time.time()
-        
+
+        # PARALELIZACION MTF (Fase F): los 5 fetches al exchange se ejecutan
+        # simultaneamente en lugar de secuencialmente. Reduce latencia ~5x.
         if ahora - self.ultimo_update_mtf >= 60 or not self.cache_mtf:
             try:
-                self.cache_mtf["1d"] = self.monitor.calcular_indicadores(self.monitor.obtener_velas(self.symbol, "1d"), 14)
-                self.cache_mtf["4h"] = self.monitor.calcular_indicadores(self.monitor.obtener_velas(self.symbol, "4h"), adn['rsi_period_macro'])
-                self.cache_mtf["1h"] = self.monitor.calcular_indicadores(self.monitor.obtener_velas(self.symbol, "1h"), 14)
-                self.cache_mtf["15m"] = self.monitor.calcular_indicadores(self.monitor.obtener_velas(self.symbol, "15m"), adn['rsi_period_micro'])
-                self.cache_mtf["5m"] = self.monitor.calcular_indicadores(self.monitor.obtener_velas(self.symbol, "5m"), 14)
+                tareas = [
+                    ("1d", 14),
+                    ("4h", adn['rsi_period_macro']),
+                    ("1h", 14),
+                    ("15m", adn['rsi_period_micro']),
+                    ("5m", 14),
+                ]
+                futuros = [self._mtf_pool.submit(self._fetch_mtf_tf, tf, rsi)
+                           for tf, rsi in tareas]
+                for fut in futuros:
+                    tf, df = fut.result(timeout=30)
+                    self.cache_mtf[tf] = df
                 self.ultimo_update_mtf = ahora
             except Exception as e:
                 self.bitacora.registrar_error("Monitor_Mercado", f"Fallo al actualizar velas MTF: {str(e)}")
                 self.log_ui(f"⚠️ Reintento de red MTF en el próximo ciclo.")
-                return 
-        
+                return
+
+        # CACHE 1M (Fase F): la vela 1m cierra cada 60s; refrescar cada 5s era
+        # un fetch de Binance desperdiciado. Cacheamos `intervalo_1m_seg` segundos.
         try:
-            df_1m = self.monitor.calcular_indicadores(self.monitor.obtener_velas(self.symbol, "1m"), 14)
+            if self.cache_1m is None or (ahora - self.ultimo_update_1m) >= self.intervalo_1m_seg:
+                self.cache_1m = self.monitor.calcular_indicadores(
+                    self.monitor.obtener_velas(self.symbol, "1m"), 14
+                )
+                self.ultimo_update_1m = ahora
+            df_1m = self.cache_1m
         except Exception as e:
             self.bitacora.registrar_error("Monitor_Mercado", f"Fallo al actualizar vela 1m: {str(e)}")
             return
@@ -421,13 +593,15 @@ class OrquestadorCentral:
             pos_side = "LONG" if side == "BUY" else "SHORT"
             qty_formateada = round(cantidad_monedas, 1)
 
-            # Colocar Protecciones
-            self.conexion.client.futures_create_order(symbol=self.symbol, side=side_salida, positionSide=pos_side, type="STOP_MARKET", stopPrice=round(sl_price, 2), quantity=qty_formateada)
-            self.bitacora.registrar_operacion("COLOCAR_SL", self.symbol, side_salida, qty_formateada, round(sl_price, 2), "Estrategia VIP")
-            
-            self.conexion.client.futures_create_order(symbol=self.symbol, side=side_salida, positionSide=pos_side, type="TAKE_PROFIT_MARKET", stopPrice=round(tp_price, 2), quantity=qty_formateada)
-            self.bitacora.registrar_operacion("COLOCAR_TP", self.symbol, side_salida, qty_formateada, round(tp_price, 2), "Estrategia VIP")
-            
+            # Colocar Protecciones (Pilar 2: via coordinador + Pilar 1: persistencia)
+            self.asegurador.colocar_protecciones(
+                symbol=self.symbol,
+                side_entrada=side,
+                cantidad=qty_formateada,
+                sl_price=sl_price,
+                tp_price=tp_price,
+                price_precision=2,
+            )
             self.log_ui(f"✅ PROTECCIÓN VIP ACTIVA. SL: {sl_price:.2f} | TP: {tp_price:.2f}")
         except Exception as e:
             self.log_ui(f"❌ Fallo crítico en disparador VIP: {e}")
@@ -470,16 +644,19 @@ class OrquestadorCentral:
             self.log_ui(f"✅ MTF {lado} Ejecutado | Lotes: {senal.get('lotaje', 1.0)}")
             self.bitacora.registrar_operacion("ABRIR_POSICION", self.symbol, side_binance, round(cantidad_final, 1), precio_mercado, "Estrategia MTF")
             
-            # --- NUEVO: COLOCACIÓN DE PROTECCIONES EN MTF ---
+            # --- NUEVO: COLOCACIÓN DE PROTECCIONES EN MTF (Pilar 2 + Pilar 1) ---
             sl_price = precio_mercado * (1 - sl_pct) if side_binance == 'BUY' else precio_mercado * (1 + sl_pct)
             tp_price = precio_mercado * (1 + tp_pct) if side_binance == 'BUY' else precio_mercado * (1 - tp_pct)
             qty_formateada = round(cantidad_final, 1)
 
-            self.conexion.client.futures_create_order(symbol=self.symbol, side=side_salida, positionSide=pos_side, type="STOP_MARKET", stopPrice=round(sl_price, 2), quantity=qty_formateada)
-            self.bitacora.registrar_operacion("COLOCAR_SL", self.symbol, side_salida, qty_formateada, round(sl_price, 2), "Estrategia MTF")
-            
-            self.conexion.client.futures_create_order(symbol=self.symbol, side=side_salida, positionSide=pos_side, type="TAKE_PROFIT_MARKET", stopPrice=round(tp_price, 2), quantity=qty_formateada)
-            self.bitacora.registrar_operacion("COLOCAR_TP", self.symbol, side_salida, qty_formateada, round(tp_price, 2), "Estrategia MTF")
+            self.asegurador.colocar_protecciones(
+                symbol=self.symbol,
+                side_entrada=side_binance,
+                cantidad=qty_formateada,
+                sl_price=sl_price,
+                tp_price=tp_price,
+                price_precision=2,
+            )
             self.log_ui(f"✅ PROTECCIÓN MTF ACTIVA. SL: {sl_price:.2f} | TP: {tp_price:.2f}")
 
             if senal.get('use_trailing', False):
@@ -489,36 +666,95 @@ class OrquestadorCentral:
             self.log_ui(f"❌ Fallo MTF: {e}")
             self.bitacora.registrar_error("Disparador MTF", str(e))
 
+    # =========================================================================
+    # HILOS ESPECIALIZADOS (R1: Refactor profundo - un departamento por hilo)
+    # SQLite WAL permite acceso concurrente seguro entre todos ellos.
+    # =========================================================================
+
+    def _en_pausa_fin_de_semana(self) -> bool:
+        """Devuelve True si es fin de semana y aplica el cambio de estado UI."""
+        if datetime.now().weekday() >= 5:
+            if self.estado_ui['estado_bot'] != "[yellow]REPOSO (FIN DE SEMANA)[/yellow]":
+                self.estado_ui['estado_bot'] = "[yellow]REPOSO (FIN DE SEMANA)[/yellow]"
+                self.log_ui("💤 Pausando bot por fin de semana.")
+                self.bitacora.registrar_actividad("Main_Orquestador", "Pausa automática por fin de semana.")
+            return True
+        if self.estado_ui['estado_bot'] == "[yellow]REPOSO (FIN DE SEMANA)[/yellow]":
+            self.estado_ui['estado_bot'] = "[green]OPERATIVO[/green]"
+            self.log_ui("▶️ Apertura de mercado. Reanudando operaciones.")
+            self.bitacora.registrar_actividad("Main_Orquestador", "Reanudación automática, apertura de mercado.")
+        return False
+
     def hilo_motor_trading(self):
+        """Hilo principal: ping de latencia + ciclo de analisis (cada 5s)."""
         while True:
             try:
-                if datetime.now().weekday() >= 5:
-                    if self.estado_ui['estado_bot'] != "[yellow]REPOSO (FIN DE SEMANA)[/yellow]":
-                        self.estado_ui['estado_bot'] = "[yellow]REPOSO (FIN DE SEMANA)[/yellow]"
-                        self.log_ui("💤 Pausando bot por fin de semana.")
-                        self.bitacora.registrar_actividad("Main_Orquestador", "Pausa automática por fin de semana.")
-                    time.sleep(60) 
+                if self._en_pausa_fin_de_semana():
+                    time.sleep(60)
                     continue
-                else:
-                    if self.estado_ui['estado_bot'] == "[yellow]REPOSO (FIN DE SEMANA)[/yellow]":
-                        self.estado_ui['estado_bot'] = "[green]OPERATIVO[/green]"
-                        self.log_ui("▶️ Apertura de mercado. Reanudando operaciones.")
-                        self.bitacora.registrar_actividad("Main_Orquestador", "Reanudación automática, apertura de mercado.")
 
                 ping_start = time.time()
                 self.conexion.client.ping()
                 self.estado_ui['latencia'] = f"{int((time.time() - ping_start)*1000)}ms"
-                
+
                 self.ciclo_analisis()
-                self.actualizar_balance()
-                self.actualizar_posiciones_en_vivo()
-                
+
+                self._ciclo_actual += 1
                 time.sleep(5)
             except Exception as e:
                 self.bitacora.registrar_error("Hilo_Motor_Trading", str(e))
                 with open("sentinel_debug.log", "a", encoding="utf-8") as f:
                     f.write(f"\n[{datetime.now()}] ERROR EN HILO MOTOR:\n{traceback.format_exc()}\n")
                 time.sleep(5)
+
+    def hilo_estado_local(self):
+        """PILAR 1: lee balance y posiciones del SQLite cada 5s. Sin tocar Binance."""
+        while True:
+            try:
+                if self._en_pausa_fin_de_semana():
+                    time.sleep(60)
+                    continue
+                self.actualizar_balance()
+                self.actualizar_posiciones_en_vivo()
+            except Exception as e:
+                self.bitacora.registrar_error("Hilo_Estado_Local", str(e))
+            time.sleep(5)
+
+    def hilo_sincronizacion_binance(self):
+        """PILAR 1: validacion periodica contra Binance cada 120s."""
+        while True:
+            try:
+                if self._en_pausa_fin_de_semana():
+                    time.sleep(60)
+                    continue
+                self.sincronizar_con_binance()
+            except Exception as e:
+                self.bitacora.registrar_error("Hilo_Sync_Binance", str(e))
+            time.sleep(self.intervalo_sync_binance_seg)
+
+    def hilo_pendientes(self):
+        """PILAR 2: procesa la cola de procesos pendientes cada 5s."""
+        while True:
+            try:
+                self.gestor_pendientes.procesar_pendientes(self._ciclo_actual)
+            except Exception as e:
+                self.bitacora.registrar_error("Hilo_Pendientes", str(e))
+            time.sleep(5)
+
+    def hilo_control_riesgo(self):
+        """Audita posiciones para Break Even / Trailing Stop. Lee del registro local."""
+        while True:
+            try:
+                if self._en_pausa_fin_de_semana():
+                    time.sleep(60)
+                    continue
+                self.controlador_trailing.auditar_posiciones(
+                    symbol=self.symbol, price_precision=2,
+                    mark_price=self.estado_ui.get('precio_actual') or None,
+                )
+            except Exception as e:
+                self.bitacora.registrar_error("Hilo_Control_Riesgo", str(e))
+            time.sleep(5)
 
     def hilo_escucha_teclado(self):
         while True:
@@ -547,8 +783,13 @@ class OrquestadorCentral:
 
         self.actualizar_balance(es_inicio=True)
 
-        threading.Thread(target=self.hilo_motor_trading, daemon=True).start()
-        threading.Thread(target=self.hilo_escucha_teclado, daemon=True).start()
+        # --- Hilos especializados (R1: refactor profundo) ---
+        threading.Thread(target=self.hilo_motor_trading, daemon=True, name="Motor").start()
+        threading.Thread(target=self.hilo_estado_local, daemon=True, name="EstadoLocal").start()
+        threading.Thread(target=self.hilo_sincronizacion_binance, daemon=True, name="SyncBinance").start()
+        threading.Thread(target=self.hilo_pendientes, daemon=True, name="Pendientes").start()
+        threading.Thread(target=self.hilo_control_riesgo, daemon=True, name="ControlRiesgo").start()
+        threading.Thread(target=self.hilo_escucha_teclado, daemon=True, name="Teclado").start()
         
         telegram = ControladorTelegram(TELEGRAM_TOKEN, self)
         telegram.iniciar()
