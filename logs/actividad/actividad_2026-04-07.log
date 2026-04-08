@@ -1,0 +1,129 @@
+2026-04-07 18:37:17 | [INFO] | MÓDULO: Main_Orquestador | ACCIÓN: Módulos instanciados y variables de estado cargadas.
+2026-04-07 18:37:18 | [INFO] | MÓDULO: Main_Orquestador | ACCIÓN: Hilo motor, escucha y Telegram iniciados.
+2026-04-07 18:46:00 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 18:46:01 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 132.679 lotes.
+2026-04-07 18:46:09 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 18:46:10 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 132.546 lotes.
+2026-04-07 18:46:18 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 18:46:18 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 132.546 lotes.
+2026-04-07 18:46:25 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 18:46:26 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 132.532 lotes.
+2026-04-07 18:46:34 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 18:46:35 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 132.532 lotes.
+2026-04-07 18:46:43 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 18:46:43 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 132.532 lotes.
+2026-04-07 18:46:51 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 18:46:51 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 132.518 lotes.
+2026-04-07 18:57:32 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 18:57:33 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 131.803 lotes.
+2026-04-07 18:57:40 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 18:57:41 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 131.776 lotes.
+2026-04-07 18:57:49 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 18:57:49 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 131.678 lotes.
+2026-04-07 18:57:57 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 18:57:57 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 131.678 lotes.
+2026-04-07 18:58:04 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 18:58:05 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 131.720 lotes.
+2026-04-07 18:58:13 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 18:58:14 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 131.734 lotes.
+2026-04-07 18:58:20 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 18:58:21 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 131.650 lotes.
+2026-04-07 18:58:29 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 18:58:29 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 131.581 lotes.
+2026-04-07 18:58:38 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 18:58:39 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 131.567 lotes.
+2026-04-07 18:58:47 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 18:58:48 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 131.567 lotes.
+2026-04-07 18:58:55 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 18:58:56 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 131.511 lotes.
+2026-04-07 18:59:04 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 18:59:04 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 131.511 lotes.
+2026-04-07 18:59:11 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 18:59:12 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 131.553 lotes.
+2026-04-07 18:59:19 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 18:59:20 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 131.511 lotes.
+2026-04-07 18:59:27 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 18:59:28 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 131.331 lotes.
+2026-04-07 18:59:35 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 18:59:35 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 131.331 lotes.
+2026-04-07 19:06:08 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 19:06:09 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 130.424 lotes.
+2026-04-07 19:06:16 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 19:06:16 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 130.451 lotes.
+2026-04-07 19:06:23 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 19:06:24 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 130.424 lotes.
+2026-04-07 19:06:31 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 19:06:32 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 130.451 lotes.
+2026-04-07 19:06:39 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 19:06:40 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 130.451 lotes.
+2026-04-07 19:06:48 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 19:06:49 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 130.301 lotes.
+2026-04-07 19:06:56 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 19:06:56 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 130.383 lotes.
+2026-04-07 19:07:04 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 19:07:04 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 130.315 lotes.
+2026-04-07 19:07:13 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 19:07:13 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 130.220 lotes.
+2026-04-07 19:07:21 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 19:07:22 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 130.206 lotes.
+2026-04-07 19:07:29 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 19:07:30 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 130.247 lotes.
+2026-04-07 19:07:37 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 19:07:38 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 130.301 lotes.
+2026-04-07 19:07:45 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 19:07:46 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 130.329 lotes.
+2026-04-07 19:07:54 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 19:07:54 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 130.342 lotes.
+2026-04-07 19:08:01 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 19:08:02 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 130.465 lotes.
+2026-04-07 19:08:10 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 19:08:11 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 130.465 lotes.
+2026-04-07 19:08:20 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 19:08:21 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 130.479 lotes.
+2026-04-07 19:08:28 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 19:08:29 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 130.479 lotes.
+2026-04-07 19:08:36 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 19:08:37 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 130.465 lotes.
+2026-04-07 19:08:45 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 19:08:46 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 130.465 lotes.
+2026-04-07 19:08:53 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 19:08:54 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 130.465 lotes.
+2026-04-07 19:09:02 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 19:09:03 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 130.424 lotes.
+2026-04-07 19:09:10 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 19:09:11 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 130.465 lotes.
+2026-04-07 19:09:18 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 19:09:19 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 130.410 lotes.
+2026-04-07 19:11:39 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 19:11:40 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 130.084 lotes.
+2026-04-07 19:11:47 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 19:11:47 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 130.070 lotes.
+2026-04-07 19:11:55 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 19:11:56 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 130.233 lotes.
+2026-04-07 19:12:03 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 19:12:03 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 130.274 lotes.
+2026-04-07 19:12:10 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 19:12:11 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 130.260 lotes.
+2026-04-07 19:12:18 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 19:12:19 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 130.288 lotes.
+2026-04-07 19:12:25 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 19:12:26 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 130.206 lotes.
+2026-04-07 19:12:32 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 19:12:33 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 130.165 lotes.
+2026-04-07 19:12:41 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 19:12:41 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 130.179 lotes.
+2026-04-07 19:12:49 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 19:12:49 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 130.165 lotes.
+2026-04-07 19:12:57 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 19:12:57 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 130.043 lotes.
+2026-04-07 19:13:04 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 19:13:04 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 130.056 lotes.
+2026-04-07 19:13:12 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 19:13:13 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 130.029 lotes.
+2026-04-07 19:13:20 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 19:13:20 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 130.029 lotes.
+2026-04-07 19:13:27 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 19:13:28 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 130.029 lotes.
+2026-04-07 19:13:35 | [INFO] | MÓDULO: Motor MTF | ACCIÓN: Señal detectada: REBALANCEO_TECHO
+2026-04-07 19:13:35 | [INFO] | MÓDULO: Gestor de Riesgo | ACCIÓN: Aprobación MTF: Calculados 130.029 lotes.
+2026-04-07 19:15:04 | [INFO] | MÓDULO: Main_Orquestador | ACCIÓN: Sistema apagado por el usuario (Ctrl+C).

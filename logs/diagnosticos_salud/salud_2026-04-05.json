@@ -1,0 +1,24 @@
+[
+    {
+        "timestamp": "2026-04-05 23:04:28",
+        "uptime_horas": 0.0,
+        "estado_general": "OPTIMO",
+        "telemetria_hardware": {
+            "hardware_seguro": true,
+            "cpu_global_pct": 5.1,
+            "ram_global_pct": 36.1,
+            "ram_bot_mb": 146.83
+        }
+    },
+    {
+        "timestamp": "2026-04-05 23:10:00",
+        "uptime_horas": 0.0,
+        "estado_general": "OPTIMO",
+        "telemetria_hardware": {
+            "hardware_seguro": true,
+            "cpu_global_pct": 8.9,
+            "ram_global_pct": 36.2,
+            "ram_bot_mb": 146.76
+        }
+    }
+]

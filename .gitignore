@@ -1,0 +1,6 @@
+.env
+data_historica/AAVEUSDT/historico_5m.csv
+data_historica/AAVEUSDT/historico_15m.csv
+data_historica/AAVEUSDT/historico_1h.csv
+data_historica/AAVEUSDT/historico_4h.csv
+data_historica/AAVEUSDT/historico_1d.csv

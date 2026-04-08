@@ -1,0 +1,13 @@
+[
+    {
+        "timestamp": "2026-04-04 19:20:10",
+        "uptime_horas": 0.0,
+        "estado_general": "EN RIESGO",
+        "telemetria_hardware": {
+            "hardware_seguro": false,
+            "cpu_global_pct": 19.6,
+            "ram_global_pct": 90.4,
+            "ram_bot_mb": 151.23
+        }
+    }
+]

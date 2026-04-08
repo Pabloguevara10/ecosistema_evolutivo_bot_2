@@ -1,0 +1,86 @@
+[
+    {
+        "id_estrategia": "MTF-AEF87CF8",
+        "fecha": "2026-04-03 17:31:11",
+        "parametros": {
+            "rsi_period_macro": 9,
+            "rsi_os_macro": 35,
+            "rsi_ob_macro": 54,
+            "rsi_period_micro": 14,
+            "rsi_os_micro": 41,
+            "rsi_ob_micro": 69,
+            "fibo_max_dist": 0.0182,
+            "sl_pct": 0.0199,
+            "tp_pct": 0.0476,
+            "leverage": 5
+        },
+        "metricas": {
+            "riesgo_ruina_absoluta": 0.0,
+            "drawdown_esperado": 46.47084571827532,
+            "aprobado": true
+        }
+    },
+    {
+        "id_estrategia": "MTF-60970CEB",
+        "fecha": "2026-04-03 17:31:13",
+        "parametros": {
+            "rsi_period_macro": 9,
+            "rsi_os_macro": 42,
+            "rsi_ob_macro": 55,
+            "rsi_period_micro": 14,
+            "rsi_os_micro": 37,
+            "rsi_ob_micro": 67,
+            "fibo_max_dist": 0.0108,
+            "sl_pct": 0.0166,
+            "tp_pct": 0.0478,
+            "leverage": 5
+        },
+        "metricas": {
+            "riesgo_ruina_absoluta": 0.0,
+            "drawdown_esperado": 45.476296217193976,
+            "aprobado": true
+        }
+    },
+    {
+        "id_estrategia": "MTF-9696E766",
+        "fecha": "2026-04-03 17:31:18",
+        "parametros": {
+            "rsi_period_macro": 9,
+            "rsi_os_macro": 36,
+            "rsi_ob_macro": 64,
+            "rsi_period_micro": 14,
+            "rsi_os_micro": 38,
+            "rsi_ob_micro": 61,
+            "fibo_max_dist": 0.0137,
+            "sl_pct": 0.0192,
+            "tp_pct": 0.0427,
+            "leverage": 5
+        },
+        "metricas": {
+            "riesgo_ruina_absoluta": 0.0,
+            "drawdown_esperado": 52.05769113788875,
+            "aprobado": true
+        }
+    },
+    {
+        "id_estrategia": "MTF-00A07647",
+        "fecha": "2026-04-04 00:40:31",
+        "parametros": {
+            "rsi_period_macro": 9,
+            "rsi_os_macro": 48,
+            "rsi_ob_macro": 57,
+            "rsi_period_micro": 14,
+            "rsi_os_micro": 32,
+            "rsi_ob_micro": 68,
+            "fibo_max_dist": 0.0141,
+            "sl_pct": 0.0183,
+            "tp_pct": 0.0358,
+            "leverage": 5
+        },
+        "metricas": {
+            "riesgo_ruina_absoluta": 0.0,
+            "drawdown_esperado": 50.290637918195515,
+            "aprobado": true
+        }
+    }
+]
