@@ -39,6 +39,11 @@ class ControladorDinamico:
                 entry_price = pos["precio_entrada"] if "precio_entrada" in pos else float(pos.get("entryPrice", 0))
                 side = pos.get("direccion") or ("LONG" if cantidad_abierta > 0 else "SHORT")
 
+                # Guard: entry_price=0.0 ocurre cuando el precio MARKET aun no fue
+                # sincronizado desde Binance. Dividir por cero produciria excepcion.
+                if entry_price == 0:
+                    continue
+
                 # Calcular rentabilidad actual (PNL Porcentual sin apalancamiento)
                 if side == "LONG":
                     pnl_pct = (mark_price - entry_price) / entry_price

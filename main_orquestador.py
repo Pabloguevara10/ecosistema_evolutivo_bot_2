@@ -396,19 +396,31 @@ class OrquestadorCentral:
 
     def _detectar_y_procesar_cierres(self):
         """
-        Detecta posiciones que Binance cerro via SL o TP pero que SQLite
-        todavia registra como ACTIVA. Para cada una:
-          1. Cancela en Binance las ordenes de proteccion huerfanas (la que no se ejecuto).
-          2. Marca la posicion como CERRADA en SQLite y cancela sus ordenes activas.
-          3. Corrige entry_price si es 0.0 (bug de sesiones anteriores sin avgPrice).
+        Dos funciones independientes en un solo ciclo Binance:
+
+        PARTE A — Detecta posiciones ACTIVA en SQLite que ya cerraron en Binance:
+          1. Cancela en Binance las ordenes de proteccion huerfanas.
+          2. Marca CERRADA en SQLite y cancela sus ordenes activas.
+          3. Corrige entry_price si es 0.0 (MARKET orders de sesiones antiguas).
           4. Notifica por Telegram.
+
+        PARTE B — Cancela CUALQUIER orden de proteccion huerfana en Binance:
+          Independientemente del estado SQLite, si existe una orden STOP_MARKET
+          o TAKE_PROFIT_MARKET para un positionSide donde positionAmt==0, la
+          cancela. Esto cubre el caso donde PARTE A fallo en el primer intento
+          (p. ej. testnet inestable) y la posicion ya fue marcada CERRADA en SQLite.
+          Se reintenta en cada ciclo de 30s hasta exito.
+
         Se invoca cada 30s desde sincronizar_con_binance().
         """
-        posiciones_sqlite = self.registro.obtener_posiciones_abiertas(self.symbol)
-        if not posiciones_sqlite:
-            return  # Nada que verificar — evitamos la llamada a Binance innecesaria
-
-        datos_binance = self.conexion.client.futures_position_information(symbol=self.symbol)
+        # Una sola consulta a Binance sirve para ambas partes
+        try:
+            datos_binance = self.conexion.client.futures_position_information(symbol=self.symbol)
+        except Exception as e_pos:
+            self.bitacora.registrar_error(
+                "Sync_Cierres", f"No se pudo consultar posiciones Binance: {e_pos}"
+            )
+            return
 
         # Mapa positionSide -> {amt, entryPrice}
         mapa_binance = {}
@@ -419,7 +431,9 @@ class OrquestadorCentral:
                 "entryPrice": float(p.get("entryPrice", 0)),
             }
 
-        ordenes_abiertas_cargadas = None  # Carga perezosa: solo si se detecta algun cierre
+        # ── PARTE A: posiciones ACTIVA en SQLite que cerraron en Binance ──────────
+        posiciones_sqlite = self.registro.obtener_posiciones_abiertas(self.symbol)
+        ordenes_abiertas = None  # carga perezosa, compartida con PARTE B
 
         for pos in posiciones_sqlite:
             direccion = str(pos.get("direccion", "")).upper()
@@ -427,27 +441,27 @@ class OrquestadorCentral:
             info      = mapa_binance.get(direccion, {"amt": 0, "entryPrice": 0})
 
             if info["amt"] == 0:
-                # ── Posicion cerrada en Binance, aun ACTIVA en SQLite ──────────────
+                # Posicion cerrada en Binance, aun ACTIVA en SQLite
                 self.bitacora.registrar_diagnostico(
                     "Sync_Cierres",
                     f"Posicion {direccion} id_local={id_local} cerrada en Binance. Procesando.",
                 )
 
-                # Cargar ordenes abiertas una sola vez por ciclo de sync
-                if ordenes_abiertas_cargadas is None:
+                # Cargar ordenes (se reutiliza en PARTE B)
+                if ordenes_abiertas is None:
                     try:
-                        ordenes_abiertas_cargadas = self.conexion.client.futures_get_open_orders(
+                        ordenes_abiertas = self.conexion.client.futures_get_open_orders(
                             symbol=self.symbol
                         )
                     except Exception as e_ord:
                         self.bitacora.registrar_error(
                             "Sync_Cierres", f"No se pudo obtener ordenes abiertas: {e_ord}"
                         )
-                        ordenes_abiertas_cargadas = []
+                        ordenes_abiertas = []
 
-                # Cancelar ordenes de proteccion huerfanas (TP si SL disparo, o viceversa)
+                # Cancelar ordenes de proteccion huerfanas de esta posicion
                 side_proteccion = "SELL" if direccion == "LONG" else "BUY"
-                for o in ordenes_abiertas_cargadas:
+                for o in ordenes_abiertas:
                     if (str(o.get("positionSide", "")).upper() == direccion and
                             str(o.get("side", "")).upper() == side_proteccion):
                         try:
@@ -459,13 +473,12 @@ class OrquestadorCentral:
                                 f"Orden huerfana {o['orderId']} ({o.get('type','?')}) cancelada.",
                             )
                         except Exception as e_cancel:
-                            # -2011 = orden ya cancelada o ejecutada: es esperado, ignorar
                             self.bitacora.registrar_diagnostico(
                                 "Sync_Cierres",
                                 f"Orden {o['orderId']} no cancelable (ya ejecutada?): {e_cancel}",
                             )
 
-                # Marcar CERRADA en SQLite + cancelar ordenes ACEPTADA asociadas
+                # Marcar CERRADA en SQLite + cancelar ordenes ACEPTADA
                 try:
                     self.registro.cerrar_posicion(id_local)
                     self.registro.cancelar_ordenes_de_posicion(id_local)
@@ -491,9 +504,8 @@ class OrquestadorCentral:
                 )
 
             else:
-                # ── Posicion aun abierta: corregir entry_price si es 0.0 ───────────
-                # Bug de sesiones anteriores: MARKET orders guardaban precio_entrada=0.0
-                precio_sqlite = float(pos.get("precio_entrada", 0))
+                # Posicion aun abierta: corregir entry_price si es 0.0
+                precio_sqlite  = float(pos.get("precio_entrada", 0))
                 precio_binance = info["entryPrice"]
                 if precio_sqlite == 0.0 and precio_binance > 0:
                     try:
@@ -506,6 +518,47 @@ class OrquestadorCentral:
                         self.bitacora.registrar_error(
                             "Sync_Cierres", f"Error actualizando entry price: {e_precio}"
                         )
+
+        # ── PARTE B: cancela ordenes de proteccion huerfanas independientemente ───
+        # Esto cubre el caso donde PARTE A fallo al cargar las ordenes la primera vez
+        # (testnet inestable) pero la posicion ya fue marcada CERRADA en SQLite.
+        # Se reintenta en cada ciclo de 30s hasta que no queden huerfanas.
+        try:
+            if ordenes_abiertas is None:
+                ordenes_abiertas = self.conexion.client.futures_get_open_orders(
+                    symbol=self.symbol
+                )
+        except Exception:
+            return  # Si no podemos cargar ordenes, intentamos en el proximo ciclo
+
+        tipos_proteccion = {"STOP_MARKET", "TAKE_PROFIT_MARKET"}
+        for o in ordenes_abiertas:
+            tipo_o = str(o.get("type", "")).upper()
+            if tipo_o not in tipos_proteccion:
+                continue
+            ps = str(o.get("positionSide", "")).upper()
+            if ps not in ("LONG", "SHORT"):
+                continue
+            amt_binance = mapa_binance.get(ps, {"amt": 0})["amt"]
+            if amt_binance == 0:
+                # Orden de proteccion sin posicion subyacente → huerfana
+                try:
+                    self.conexion.client.futures_cancel_order(
+                        symbol=self.symbol, orderId=o["orderId"]
+                    )
+                    self.bitacora.registrar_actividad(
+                        "Sync_Cierres",
+                        f"[PARTE B] Orden huerfana {o['orderId']} "
+                        f"({tipo_o}/{ps}) cancelada automaticamente.",
+                    )
+                    self.log_ui(
+                        f"🧹 Orden huerfana cancelada: {o['orderId']} ({tipo_o}/{ps})"
+                    )
+                except Exception as e_b:
+                    self.bitacora.registrar_diagnostico(
+                        "Sync_Cierres",
+                        f"[PARTE B] Orden {o['orderId']} no cancelable: {e_b}",
+                    )
 
     def obtener_valor_seguro(self, df, columna, posicion):
         return df[columna].iloc[posicion] if columna in df.columns else 0.0
@@ -675,20 +728,30 @@ class OrquestadorCentral:
                 df_1h = self.cache_mtf["1h"]
                 df_4h = self.cache_mtf["4h"]
                 df_15m = self.cache_mtf["15m"]
-                
-                scanner = StructureScanner(df_1h)
-                scanner.precompute()
-                ctx_fibo = scanner.get_fibonacci_context(len(df_1h) - 1)
-                dist_fibo = min([abs(precio_actual - v) / precio_actual for v in ctx_fibo['fibs'].values()]) if ctx_fibo else 999
 
-                signal = self.comparador.evaluar_mercado(df_4h, df_1h, df_15m, dist_fibo)
-                
-                if signal:
-                    tipo_senal = signal.get('senal', 'UNKNOWN')
-                    self.log_ui(f"🚨 ALERTA ESTRUCTURAL VIP: {tipo_senal}")
-                    self.bitacora.registrar_actividad("Comparador VIP", f"Señal detectada: {tipo_senal}")
-                    paquete = self.emisor.empaquetar_entrada(self.comparador.adn['id_estrategia'], signal, precio_actual, adn)
-                    self.ciclo_ejecucion(paquete)
+                # Validar DataFrames antes de usar StructureScanner:
+                #   - 'high' KeyError: el DataFrame tiene columnas equivocadas (fetch fallido)
+                #   - 'single positional indexer is out-of-bounds': menos de 2 filas
+                # Ambos errores se generan cuando el testnet devuelve datos incompletos.
+                _cols_req = {'high', 'low', 'close', 'open'}
+                if (df_1h is None or len(df_1h) < 10 or not _cols_req.issubset(df_1h.columns) or
+                        df_4h is None or len(df_4h) < 5 or
+                        df_15m is None or len(df_15m) < 5):
+                    pass  # DataFrame no listo aun — omitir sin registrar error
+                else:
+                    scanner = StructureScanner(df_1h)
+                    scanner.precompute()
+                    ctx_fibo = scanner.get_fibonacci_context(len(df_1h) - 1)
+                    dist_fibo = min([abs(precio_actual - v) / precio_actual for v in ctx_fibo['fibs'].values()]) if ctx_fibo else 999
+
+                    signal = self.comparador.evaluar_mercado(df_4h, df_1h, df_15m, dist_fibo)
+
+                    if signal:
+                        tipo_senal = signal.get('senal', 'UNKNOWN')
+                        self.log_ui(f"🚨 ALERTA ESTRUCTURAL VIP: {tipo_senal}")
+                        self.bitacora.registrar_actividad("Comparador VIP", f"Señal detectada: {tipo_senal}")
+                        paquete = self.emisor.empaquetar_entrada(self.comparador.adn['id_estrategia'], signal, precio_actual, adn)
+                        self.ciclo_ejecucion(paquete)
             except Exception as e:
                 self.bitacora.registrar_error("Ruteo VIP", str(e))
 
@@ -840,11 +903,19 @@ class OrquestadorCentral:
         confianza = resultado_ia.get("confianza", 0.0)
         regimen   = resultado_ia.get("regimen", "?")
 
-        # Actualizar UI con estado de la IA
-        self.log_ui(
-            f"🤖 IA: accion={accion} | conf={confianza:.2f} | "
-            f"regimen={regimen} | lat={resultado_ia.get('latencia_ms',0):.1f}ms"
-        )
+        # Actualizar UI con estado de la IA — solo cuando cambia la accion
+        # o cada 12 ciclos (~60s) para no inundar el buffer de mensajes del dashboard.
+        if not hasattr(self, '_ia_ultima_accion'):
+            self._ia_ultima_accion = -1
+            self._ia_ciclos_log = 0
+        self._ia_ciclos_log += 1
+        if accion != self._ia_ultima_accion or self._ia_ciclos_log >= 12:
+            self._ia_ultima_accion = accion
+            self._ia_ciclos_log = 0
+            self.log_ui(
+                f"🤖 IA: accion={accion} | conf={confianza:.2f} | "
+                f"regimen={regimen} | lat={resultado_ia.get('latencia_ms',0):.1f}ms"
+            )
 
         # --- Decision de ejecucion ---
         # Acciones IA: 0=HOLD, 1-3=LONG, 4-6=SHORT, 7=CLOSE, 8-9=PIRAMIDE
