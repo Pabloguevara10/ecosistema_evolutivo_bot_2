@@ -69,6 +69,19 @@ except ImportError as e:
     print(f"❌ Error de Importación: {e}")
     sys.exit(1)
 
+# --- MODULO IA LOCAL (opcional: el bot opera sin IA si no esta disponible) ---
+try:
+    import numpy as _np_ia
+    from ia_local.inference.model_server import IAClient
+    from ia_local.config import (
+        OBS_SPACE_DIM as _IA_OBS_DIM,
+        IA_CAPITAL_PCT, REGLAS_CAPITAL_PCT, CONFIANZA_IA_SOLO,
+    )
+    _IA_DISPONIBLE = True
+except Exception as _ia_err:
+    _IA_DISPONIBLE = False
+    print(f"[IA] Modulo IA no disponible ({_ia_err}). Operando en modo reglas clasicas.")
+
 class SincronizadorDummy:
     def get_timestamp_corregido(self):
         return int(time.time() * 1000)
@@ -143,10 +156,17 @@ class OrquestadorCentral:
 
         # Contador de ciclos del motor: usado por coordinador y gestor de pendientes
         self._ciclo_actual = 0
+        # Cooldown post-entrada: impide abrir nueva posicion por COOLDOWN_ENTRADA_SEG
+        # segundos tras la ultima apertura (evita piramidacion por senales repetidas)
+        self._timestamp_ultima_entrada = 0.0
+        self.COOLDOWN_ENTRADA_SEG = 900  # 15 minutos
         # Marca de la ultima sincronizacion contra Binance (segs unix)
         self._ultima_sync_binance = 0.0
-        # Cada cuantos segundos validamos contra Binance (Pilar 1)
-        self.intervalo_sync_binance_seg = 120
+        self._ultima_sync_balance = 0.0  # Timer independiente para snapshot de balance
+        # Detectar cierres de posicion (SL/TP ejecutados) cada 30s
+        self.intervalo_sync_binance_seg = 30
+        # Balance real contra Binance: solo cada 120s para reducir presion API
+        self.intervalo_sync_balance_seg = 120
 
         # --- PILAR 2: COORDINADOR DE REINTENTOS PROGRESIVOS ---
         self.coordinador = CoordinadorReintentos(
@@ -194,6 +214,24 @@ class OrquestadorCentral:
 
         # RIESGO INSTITUCIONAL: 5% del balance por operación (calculado vs Stop Loss)
         self.porcentaje_riesgo = 0.05
+
+        # --- MODULO IA: cliente HTTP al servidor de inferencia local ---
+        # El servidor IA corre en proceso separado (python -m ia_local.inference.model_server).
+        # Si no esta disponible, el bot opera en modo 100% reglas clasicas sin degradacion.
+        self.ia_client = None
+        self._ia_activa = False
+        self._ultimo_obs_ia: object = None  # ultimo vector obs enviado a la IA
+        if _IA_DISPONIBLE:
+            try:
+                self.ia_client = IAClient()
+                self._ia_activa = self.ia_client.disponible
+                if self._ia_activa:
+                    self.log_ui("🤖 Modulo IA conectado. Modo hibrido IA+Reglas activado.")
+                    self.bitacora.registrar_actividad(
+                        "IA_Local", "IAClient conectado. Modo hibrido activado."
+                    )
+            except Exception as _e_ia:
+                self.log_ui(f"⚠️ IA no conectada: {_e_ia}")
 
         self.bitacora.registrar_actividad("Main_Orquestador", "Módulos instanciados y variables de estado cargadas.")
 
@@ -247,12 +285,12 @@ class OrquestadorCentral:
                 )
                 sl = float(ordenes_sl[-1]['precio']) if ordenes_sl else "N/A"
                 tp = float(ordenes_tp[-1]['precio']) if ordenes_tp else "N/A"
-                ids = []
-                if ordenes_sl and ordenes_sl[-1].get('id_orden_binance'):
-                    ids.append(str(ordenes_sl[-1]['id_orden_binance'])[-5:])
-                if ordenes_tp and ordenes_tp[-1].get('id_orden_binance'):
-                    ids.append(str(ordenes_tp[-1]['id_orden_binance'])[-5:])
-                id_mostrar = "-".join(ids) if ids else "Sin Órdenes"
+                # Mostrar ID local de la posicion + estado de protecciones registradas
+                id_local_val = pos.get('id_local')
+                id_parts = [f"L#{id_local_val}"] if id_local_val is not None else []
+                id_parts.append("SL✓" if ordenes_sl else "SL✗")
+                id_parts.append("TP✓" if ordenes_tp else "TP✗")
+                id_mostrar = " ".join(id_parts)
 
                 nuevas_pos_ui.append({
                     "symbol": pos['symbol'],
@@ -263,7 +301,7 @@ class OrquestadorCentral:
                     "tp": tp,
                     "be": "N/A",
                     "order_id": id_mostrar,
-                    "protegida": False,
+                    "protegida": bool(ordenes_sl),
                 })
             self.estado_ui["posiciones_activas"] = nuevas_pos_ui
         except Exception as e:
@@ -333,25 +371,141 @@ class OrquestadorCentral:
 
     def sincronizar_con_binance(self):
         """
-        PILAR 1: Validacion periodica contra Binance. Refresca el snapshot de
-        cuenta y, si difiere, reconstruye la UI desde el exchange.
-
-        Se llama solo cada `intervalo_sync_binance_seg` segundos para reducir
-        la presion sobre la API a ~30 llamadas/min en lugar de ~200/min.
+        PILAR 1: Validacion periodica contra Binance.
+          - Cada 30s: detecta cierres de posicion (SL/TP ejecutados) y sincroniza SQLite.
+          - Cada 120s: refresca snapshot de balance.
         """
         ahora = time.time()
         if ahora - self._ultima_sync_binance < self.intervalo_sync_binance_seg:
             return
         self._ultima_sync_binance = ahora
 
-        # 1) Snapshot de balance (forzando lectura real a Binance)
-        self.actualizar_balance(forzar=True)
-
-        # 2) Validacion de posiciones contra Binance (legacy)
+        # 1) Detectar posiciones cerradas por SL/TP y actualizar SQLite + cancelar huerfanas
         try:
-            self._construir_ui_legacy()
+            self._detectar_y_procesar_cierres()
         except Exception as e:
-            self.bitacora.registrar_error("Sync Binance", f"Validacion fallo: {e}")
+            self.bitacora.registrar_error("Sync Binance", f"Error detectando cierres: {e}")
+
+        # 2) Snapshot de balance — solo cada intervalo_sync_balance_seg (120s)
+        if ahora - self._ultima_sync_balance >= self.intervalo_sync_balance_seg:
+            self._ultima_sync_balance = ahora
+            try:
+                self.actualizar_balance(forzar=True)
+            except Exception as e:
+                self.bitacora.registrar_error("Sync Binance", f"Error actualizando balance: {e}")
+
+    def _detectar_y_procesar_cierres(self):
+        """
+        Detecta posiciones que Binance cerro via SL o TP pero que SQLite
+        todavia registra como ACTIVA. Para cada una:
+          1. Cancela en Binance las ordenes de proteccion huerfanas (la que no se ejecuto).
+          2. Marca la posicion como CERRADA en SQLite y cancela sus ordenes activas.
+          3. Corrige entry_price si es 0.0 (bug de sesiones anteriores sin avgPrice).
+          4. Notifica por Telegram.
+        Se invoca cada 30s desde sincronizar_con_binance().
+        """
+        posiciones_sqlite = self.registro.obtener_posiciones_abiertas(self.symbol)
+        if not posiciones_sqlite:
+            return  # Nada que verificar — evitamos la llamada a Binance innecesaria
+
+        datos_binance = self.conexion.client.futures_position_information(symbol=self.symbol)
+
+        # Mapa positionSide -> {amt, entryPrice}
+        mapa_binance = {}
+        for p in datos_binance:
+            ps = str(p.get("positionSide", "")).upper()
+            mapa_binance[ps] = {
+                "amt":        float(p.get("positionAmt", 0)),
+                "entryPrice": float(p.get("entryPrice", 0)),
+            }
+
+        ordenes_abiertas_cargadas = None  # Carga perezosa: solo si se detecta algun cierre
+
+        for pos in posiciones_sqlite:
+            direccion = str(pos.get("direccion", "")).upper()
+            id_local  = pos.get("id_local")
+            info      = mapa_binance.get(direccion, {"amt": 0, "entryPrice": 0})
+
+            if info["amt"] == 0:
+                # ── Posicion cerrada en Binance, aun ACTIVA en SQLite ──────────────
+                self.bitacora.registrar_diagnostico(
+                    "Sync_Cierres",
+                    f"Posicion {direccion} id_local={id_local} cerrada en Binance. Procesando.",
+                )
+
+                # Cargar ordenes abiertas una sola vez por ciclo de sync
+                if ordenes_abiertas_cargadas is None:
+                    try:
+                        ordenes_abiertas_cargadas = self.conexion.client.futures_get_open_orders(
+                            symbol=self.symbol
+                        )
+                    except Exception as e_ord:
+                        self.bitacora.registrar_error(
+                            "Sync_Cierres", f"No se pudo obtener ordenes abiertas: {e_ord}"
+                        )
+                        ordenes_abiertas_cargadas = []
+
+                # Cancelar ordenes de proteccion huerfanas (TP si SL disparo, o viceversa)
+                side_proteccion = "SELL" if direccion == "LONG" else "BUY"
+                for o in ordenes_abiertas_cargadas:
+                    if (str(o.get("positionSide", "")).upper() == direccion and
+                            str(o.get("side", "")).upper() == side_proteccion):
+                        try:
+                            self.conexion.client.futures_cancel_order(
+                                symbol=self.symbol, orderId=o["orderId"]
+                            )
+                            self.bitacora.registrar_actividad(
+                                "Sync_Cierres",
+                                f"Orden huerfana {o['orderId']} ({o.get('type','?')}) cancelada.",
+                            )
+                        except Exception as e_cancel:
+                            # -2011 = orden ya cancelada o ejecutada: es esperado, ignorar
+                            self.bitacora.registrar_diagnostico(
+                                "Sync_Cierres",
+                                f"Orden {o['orderId']} no cancelable (ya ejecutada?): {e_cancel}",
+                            )
+
+                # Marcar CERRADA en SQLite + cancelar ordenes ACEPTADA asociadas
+                try:
+                    self.registro.cerrar_posicion(id_local)
+                    self.registro.cancelar_ordenes_de_posicion(id_local)
+                except Exception as e_sq:
+                    self.bitacora.registrar_error(
+                        "Sync_Cierres", f"Error actualizando SQLite: {e_sq}"
+                    )
+
+                # Notificar Telegram
+                try:
+                    self.notificador.enviar_mensaje(
+                        f"✅ Posicion cerrada detectada\n"
+                        f"Simbolo: {self.symbol}   Direccion: {direccion}\n"
+                        f"ID local: {id_local}\n"
+                        f"(SL o TP activado automaticamente en Binance)"
+                    )
+                except Exception:
+                    pass
+
+                self.log_ui(
+                    f"📋 Cierre detectado: {direccion} {self.symbol} "
+                    f"(id={id_local}) — SQLite y dashboard actualizados."
+                )
+
+            else:
+                # ── Posicion aun abierta: corregir entry_price si es 0.0 ───────────
+                # Bug de sesiones anteriores: MARKET orders guardaban precio_entrada=0.0
+                precio_sqlite = float(pos.get("precio_entrada", 0))
+                precio_binance = info["entryPrice"]
+                if precio_sqlite == 0.0 and precio_binance > 0:
+                    try:
+                        self.registro.actualizar_precio_entrada(id_local, precio_binance)
+                        self.bitacora.registrar_diagnostico(
+                            "Sync_Cierres",
+                            f"Entry price id={id_local} corregido desde Binance: {precio_binance}",
+                        )
+                    except Exception as e_precio:
+                        self.bitacora.registrar_error(
+                            "Sync_Cierres", f"Error actualizando entry price: {e_precio}"
+                        )
 
     def obtener_valor_seguro(self, df, columna, posicion):
         return df[columna].iloc[posicion] if columna in df.columns else 0.0
@@ -511,7 +665,10 @@ class OrquestadorCentral:
                 else: self.estado_ui['mtf'][tf]['trend'] = "[yellow]Lateral[/yellow]"
 
         if not self.trading_permitido:
-            return 
+            return
+
+        # precio_actual debe estar disponible para el ciclo IA incluso si VIP_ADN falla
+        precio_actual = float(self.estado_ui.get('precio_actual', 0.0))
 
         if self.config_estrategias["VIP_ADN"] and self.cache_mtf.get("1h") is not None:
             try:
@@ -521,7 +678,6 @@ class OrquestadorCentral:
                 
                 scanner = StructureScanner(df_1h)
                 scanner.precompute()
-                precio_actual = self.estado_ui['precio_actual'] 
                 ctx_fibo = scanner.get_fibonacci_context(len(df_1h) - 1)
                 dist_fibo = min([abs(precio_actual - v) / precio_actual for v in ctx_fibo['fibs'].values()]) if ctx_fibo else 999
 
@@ -540,7 +696,7 @@ class OrquestadorCentral:
             try:
                 datos_mtf = {"1h": self.cache_mtf["1h"], "15m": self.cache_mtf["15m"], "5m": self.cache_mtf["5m"]}
                 senal_mtf = self.estrategia_piramide.calcular_senyal(datos_mtf)
-                
+
                 if senal_mtf:
                     self.log_ui(f"⚡ ALERTA MTF: {senal_mtf['accion']} ({senal_mtf['motivo']})")
                     self.bitacora.registrar_actividad("Motor MTF", f"Señal detectada: {senal_mtf['accion']}")
@@ -548,6 +704,201 @@ class OrquestadorCentral:
             except Exception as e:
                 self.log_ui(f"⚠️ Error procesando Pirámide MTF: {e}")
                 self.bitacora.registrar_error("Ruteo MTF", str(e))
+
+        # -----------------------------------------------------------------------
+        # CAPA IA: decision hibrida IA + Reglas Clasicas
+        # Corre DESPUES de las reglas clasicas. Si la IA propone una accion
+        # con alta confianza y las reglas clasicas no detectaron senal, la IA
+        # puede abrir su propia posicion sobre el porcentaje de capital asignado.
+        # -----------------------------------------------------------------------
+        if self._ia_activa and self.ia_client is not None:
+            try:
+                self._ciclo_ia(precio_actual)
+            except Exception as e_ia:
+                self.bitacora.registrar_error("IA_Local", f"Ciclo IA fallo: {e_ia}")
+
+    # =========================================================================
+    # MODULO IA: LOGICA HIBRIDA
+    # =========================================================================
+
+    def _construir_obs_ia(self, precio_actual: float) -> object:
+        """
+        Construye el vector de observacion para la IA (OBS_SPACE_DIM dims)
+        usando los DataFrames del cache MTF y el estado del portfolio.
+
+        El vector es aplanado en el mismo orden que usa MTFTensorBuilder,
+        por lo que el MarketFeatureExtractor puede reconstruir los slices.
+
+        Si el cache MTF esta incompleto, retorna None (la IA no se consulta).
+        """
+        if not _IA_DISPONIBLE:
+            return None
+        try:
+            from ia_local.config import TIMEFRAMES, WINDOW_SIZES, FEATURES_POR_TF
+
+            partes = []
+            for tf in TIMEFRAMES:
+                df = self.cache_mtf.get(tf)
+                if df is None or len(df) == 0:
+                    # Si falta un TF, rellenar con ceros
+                    window = WINDOW_SIZES[tf]
+                    n_feat = len(FEATURES_POR_TF[tf])
+                    partes.append(_np_ia.zeros(window * n_feat, dtype=_np_ia.float32))
+                    continue
+
+                feats  = FEATURES_POR_TF[tf]
+                window = WINDOW_SIZES[tf]
+                # Tomar las ultimas `window` filas y las columnas de features
+                cols_disponibles = [c for c in feats if c in df.columns]
+                n_feat = len(feats)
+
+                if cols_disponibles:
+                    slice_df = df[cols_disponibles].iloc[-window:].values.astype(_np_ia.float32)
+                    # Rellenar columnas faltantes con ceros
+                    if len(cols_disponibles) < n_feat:
+                        pad_cols = n_feat - len(cols_disponibles)
+                        slice_df = _np_ia.hstack([
+                            slice_df,
+                            _np_ia.zeros((slice_df.shape[0], pad_cols), dtype=_np_ia.float32)
+                        ])
+                    # Asegurar que tiene exactamente `window` filas
+                    if slice_df.shape[0] < window:
+                        pad_rows = window - slice_df.shape[0]
+                        slice_df = _np_ia.vstack([
+                            _np_ia.zeros((pad_rows, n_feat), dtype=_np_ia.float32),
+                            slice_df
+                        ])
+                    partes.append(slice_df[:window].flatten())
+                else:
+                    partes.append(_np_ia.zeros(window * n_feat, dtype=_np_ia.float32))
+
+            market_flat = _np_ia.concatenate(partes).astype(_np_ia.float32)
+
+            # Estado del portfolio (9 dims: 6 base + 3 TSL segun PORTFOLIO_STATE_DIM)
+            balance     = self.estado_ui.get("balance_actual", 2000.0) or 2000.0
+            balance_ini = self.estado_ui.get("balance_inicial", 2000.0) or 2000.0
+            posiciones  = self.estado_ui.get("posiciones_activas", [])
+            tiene_pos   = 1.0 if posiciones else 0.0
+            pnl_pos     = sum(float(p.get("pnl_pct", 0)) for p in posiciones) if posiciones else 0.0
+            capital_ratio = min(balance / max(balance_ini, 1.0), 2.0) - 1.0  # [-1, 1]
+            drawdown    = max(0.0, (balance_ini - balance) / max(balance_ini, 1.0))
+            entradas_hoy = float(self.estado_ui.get("entradas_hoy", 0))
+            overtrade   = min(entradas_hoy / 8.0, 1.0)
+            # TSL dims: ratio posicion restante, distancia TSL normalizada, incertidumbre
+            # Cuando no hay posicion abierta: ratio=0, tsl_dist=2.0/10=0.2 (neutro), incert=0
+            ratio_pos_rest = 1.0 if posiciones else 0.0  # posicion completa = 1.0
+            tsl_dist_norm  = 0.2   # 2.0 ATR / 10 = 0.2 (distancia normal normalizada)
+            incertidumbre  = 0.0   # el servidor IA calcula esto; aqui siempre 0.0
+
+            portfolio_vec = _np_ia.array([
+                capital_ratio,
+                tiene_pos,
+                min(max(pnl_pos, -1.0), 1.0),
+                min(drawdown, 1.0),
+                overtrade,
+                0.0,           # dist_sl (no disponible directamente aqui)
+                ratio_pos_rest,
+                tsl_dist_norm,
+                incertidumbre,
+            ], dtype=_np_ia.float32)
+
+            obs = _np_ia.concatenate([market_flat, portfolio_vec])
+            obs = _np_ia.nan_to_num(obs, nan=0.0, posinf=1.0, neginf=-1.0)
+            return obs
+
+        except Exception as e:
+            self.bitacora.registrar_error("IA_Obs", f"Error construyendo obs: {e}")
+            return None
+
+    def _ciclo_ia(self, precio_actual: float):
+        """
+        Consulta la IA y, si tiene confianza suficiente, abre una posicion
+        sobre el porcentaje de capital asignado al modulo IA (IA_CAPITAL_PCT=70%).
+
+        Logica hibrida:
+        - Si la IA propone LONG/SHORT con confianza >= CONFIANZA_IA_SOLO: ejecuta.
+        - Si confianza < umbral: ignora la IA, las reglas clasicas ya decidieron.
+        - La IA no interfiere con posiciones abiertas por las reglas clasicas.
+        - La experiencia del paso siempre se envia al OnlineTrainer para aprendizaje.
+        """
+        obs = self._construir_obs_ia(precio_actual)
+        if obs is None:
+            return
+
+        # Guardar obs para calcular la experiencia en el siguiente ciclo
+        obs_prev = self._ultimo_obs_ia
+        self._ultimo_obs_ia = obs
+
+        # Consultar servidor IA (timeout = 0.5s — no bloquea el ciclo)
+        resultado_ia = self.ia_client.predecir(obs, deterministic=True)
+        if resultado_ia is None:
+            self._ia_activa = False
+            self.log_ui("⚠️ Servidor IA desconectado. Modo reglas clasicas.")
+            return
+
+        accion    = resultado_ia.get("accion", 0)
+        confianza = resultado_ia.get("confianza", 0.0)
+        regimen   = resultado_ia.get("regimen", "?")
+
+        # Actualizar UI con estado de la IA
+        self.log_ui(
+            f"🤖 IA: accion={accion} | conf={confianza:.2f} | "
+            f"regimen={regimen} | lat={resultado_ia.get('latencia_ms',0):.1f}ms"
+        )
+
+        # --- Decision de ejecucion ---
+        # Acciones IA: 0=HOLD, 1-3=LONG, 4-6=SHORT, 7=CLOSE, 8-9=PIRAMIDE
+        LONG_ACCIONES  = {1, 2, 3}
+        SHORT_ACCIONES = {4, 5, 6}
+
+        if confianza < CONFIANZA_IA_SOLO:
+            # Confianza insuficiente: la IA pasa, las reglas clasicas mandan
+            return
+
+        posiciones_activas = self.estado_ui.get("posiciones_activas", [])
+        if posiciones_activas:
+            # Ya hay posicion abierta: la IA no abre encima por seguridad
+            return
+
+        if accion in LONG_ACCIONES:
+            side_ia = "BUY"
+        elif accion in SHORT_ACCIONES:
+            side_ia = "SELL"
+        else:
+            return  # HOLD o CLOSE: no actuar
+
+        # Sizing: porcentaje del capital asignado a la IA
+        self.actualizar_balance()
+        capital_ia   = self.estado_ui["balance_actual"] * IA_CAPITAL_PCT
+        adn          = self.comparador.adn["parametros"]
+        sl_pct       = adn.get("stop_loss_pct", 0.019)
+        tp_pct       = adn.get("take_profit_pct", 0.043)
+        cantidad_ia  = (capital_ia * self.porcentaje_riesgo) / (precio_actual * sl_pct)
+        cantidad_ia  = round(cantidad_ia, 1)
+
+        if cantidad_ia <= 0:
+            return
+
+        self.log_ui(
+            f"🤖 IA EJECUTANDO: {side_ia} | conf={confianza:.2f} | "
+            f"qty={cantidad_ia} | regimen={regimen}"
+        )
+        self.bitacora.registrar_actividad(
+            "IA_Local",
+            f"Accion IA: {side_ia} qty={cantidad_ia} conf={confianza:.2f} regimen={regimen}"
+        )
+
+        # Construir paquete de senal compatible con ciclo_ejecucion
+        paquete_ia = {
+            "side":            side_ia,
+            "precio_referencia": precio_actual,
+            "sl_pct":          sl_pct,
+            "tp_pct":          tp_pct,
+            "id_estrategia":   "IA_LOCAL",
+        }
+        self.ciclo_ejecucion(paquete_ia, lote_manual=cantidad_ia)
+
+    # =========================================================================
 
     def ciclo_ejecucion(self, paquete_senal, lote_manual=None):
         side = paquete_senal['side']
@@ -576,24 +927,49 @@ class OrquestadorCentral:
             cantidad_monedas = capital_en_riesgo / (precio_mercado * sl_pct)
             self.bitacora.registrar_actividad("Gestor de Riesgo", f"Aprobación VIP: Calculados {cantidad_monedas:.3f} lotes para un riesgo de ${capital_en_riesgo:.2f}")
 
-        try:
-            self.disparador.ejecutar_orden_entrada(
-                symbol=self.symbol, side=side, tipo_orden="MARKET",
-                cantidad=cantidad_monedas, precio=None, price_precision=2, qty_precision=1    
+        # COOLDOWN: no abrir si pasaron menos de COOLDOWN_ENTRADA_SEG desde la ultima entrada
+        ahora = time.time()
+        if ahora - self._timestamp_ultima_entrada < self.COOLDOWN_ENTRADA_SEG:
+            restante = int(self.COOLDOWN_ENTRADA_SEG - (ahora - self._timestamp_ultima_entrada))
+            self.bitacora.registrar_diagnostico(
+                "Gestor Entradas", f"Cooldown activo: {restante}s restantes para nueva entrada."
             )
+            return
+
+        try:
+            resultado_orden = self.disparador.ejecutar_orden_entrada(
+                symbol=self.symbol, side=side, tipo_orden="MARKET",
+                cantidad=cantidad_monedas, precio=None, price_precision=2, qty_precision=1
+            )
+            # GUARD CRITICO: si la orden no fue confirmada por Binance,
+            # NO colocar protecciones para no crear SL/TP sin posicion asociada.
+            if resultado_orden is None:
+                self.log_ui("⚠️ Orden VIP no confirmada por Binance — se omiten protecciones.")
+                self.bitacora.registrar_diagnostico(
+                    "Disparador VIP", "Orden retorno None — protecciones abortadas."
+                )
+                return
+
             self.estado_ui['entradas_hoy'] += 1
+            self._timestamp_ultima_entrada = time.time()
             self.bitacora.registrar_operacion("ABRIR_POSICION", self.symbol, side, round(cantidad_monedas, 1), precio_mercado, "Estrategia VIP")
 
             if lote_manual is None:
-                self.gestor.registrar_entrada(f"ORD_{int(time.time())}", side, precio_mercado)
-            
+                try:
+                    self.gestor.registrar_apertura(f"ORD_{int(time.time())}", "VIP")
+                except Exception:
+                    pass
+
             sl_price = precio_mercado * (1 - sl_pct) if side == 'BUY' else precio_mercado * (1 + sl_pct)
             tp_price = precio_mercado * (1 + paquete_senal['tp_pct']) if side == 'BUY' else precio_mercado * (1 - paquete_senal['tp_pct'])
-            side_salida = "SELL" if side == "BUY" else "BUY"
-            pos_side = "LONG" if side == "BUY" else "SHORT"
             qty_formateada = round(cantidad_monedas, 1)
 
-            # Colocar Protecciones (Pilar 2: via coordinador + Pilar 1: persistencia)
+            # id_posicion_local viene embebido en la respuesta si el disparador lo registro
+            id_posicion_local = None
+            if isinstance(resultado_orden, dict):
+                id_posicion_local = resultado_orden.get("__id_posicion_local")
+
+            # Colocar Protecciones (Pilar 3: nuevo antes de cancelar viejo)
             self.asegurador.colocar_protecciones(
                 symbol=self.symbol,
                 side_entrada=side,
@@ -601,6 +977,7 @@ class OrquestadorCentral:
                 sl_price=sl_price,
                 tp_price=tp_price,
                 price_precision=2,
+                id_posicion_local=id_posicion_local,
             )
             self.log_ui(f"✅ PROTECCIÓN VIP ACTIVA. SL: {sl_price:.2f} | TP: {tp_price:.2f}")
         except Exception as e:
@@ -610,6 +987,18 @@ class OrquestadorCentral:
     def ciclo_ejecucion_mtf(self, senal):
         lado = senal['lado']
         accion = senal['accion']
+
+        # GUARDIA: no abrir si ya hay posicion activa (evita piramidacion no controlada)
+        posiciones_ui = self.estado_ui.get("posiciones_activas", [])
+        if posiciones_ui:
+            return
+        # Fallback directo a SQLite si la UI no esta actualizada aun
+        try:
+            if self.registro is not None and self.registro.obtener_posiciones_abiertas(self.symbol):
+                return
+        except Exception:
+            pass
+
         self.actualizar_balance()
 
         fraccion = senal.get('reducir_contraria', 0)
@@ -635,19 +1024,42 @@ class OrquestadorCentral:
         tipo_orden = senal.get('tipo_orden', 'MARKET')
         precio_limit = senal.get('precio_limit', None)
         
-        try:
-            self.disparador.ejecutar_orden_entrada(
-                symbol=self.symbol, side=side_binance, tipo_orden=tipo_orden,
-                cantidad=cantidad_final, precio=precio_limit, price_precision=2, qty_precision=1    
+        # COOLDOWN: no abrir si pasaron menos de COOLDOWN_ENTRADA_SEG desde la ultima entrada
+        ahora = time.time()
+        if ahora - self._timestamp_ultima_entrada < self.COOLDOWN_ENTRADA_SEG:
+            restante = int(self.COOLDOWN_ENTRADA_SEG - (ahora - self._timestamp_ultima_entrada))
+            self.bitacora.registrar_diagnostico(
+                "Gestor Entradas", f"Cooldown MTF activo: {restante}s restantes."
             )
+            return
+
+        try:
+            resultado_orden = self.disparador.ejecutar_orden_entrada(
+                symbol=self.symbol, side=side_binance, tipo_orden=tipo_orden,
+                cantidad=cantidad_final, precio=precio_limit, price_precision=2, qty_precision=1
+            )
+            # GUARD CRITICO: si la orden no fue confirmada por Binance,
+            # NO colocar protecciones para no crear SL/TP sin posicion asociada.
+            if resultado_orden is None:
+                self.log_ui("⚠️ Orden MTF no confirmada por Binance — se omiten protecciones.")
+                self.bitacora.registrar_diagnostico(
+                    "Disparador MTF", "Orden retorno None — protecciones abortadas."
+                )
+                return
+
             self.estado_ui['entradas_hoy'] += 1
+            self._timestamp_ultima_entrada = time.time()
             self.log_ui(f"✅ MTF {lado} Ejecutado | Lotes: {senal.get('lotaje', 1.0)}")
             self.bitacora.registrar_operacion("ABRIR_POSICION", self.symbol, side_binance, round(cantidad_final, 1), precio_mercado, "Estrategia MTF")
-            
-            # --- NUEVO: COLOCACIÓN DE PROTECCIONES EN MTF (Pilar 2 + Pilar 1) ---
+
+            # Colocar Protecciones (Pilar 3: nuevo antes de cancelar viejo)
             sl_price = precio_mercado * (1 - sl_pct) if side_binance == 'BUY' else precio_mercado * (1 + sl_pct)
             tp_price = precio_mercado * (1 + tp_pct) if side_binance == 'BUY' else precio_mercado * (1 - tp_pct)
             qty_formateada = round(cantidad_final, 1)
+
+            id_posicion_local = None
+            if isinstance(resultado_orden, dict):
+                id_posicion_local = resultado_orden.get("__id_posicion_local")
 
             self.asegurador.colocar_protecciones(
                 symbol=self.symbol,
@@ -656,12 +1068,13 @@ class OrquestadorCentral:
                 sl_price=sl_price,
                 tp_price=tp_price,
                 price_precision=2,
+                id_posicion_local=id_posicion_local,
             )
             self.log_ui(f"✅ PROTECCIÓN MTF ACTIVA. SL: {sl_price:.2f} | TP: {tp_price:.2f}")
 
             if senal.get('use_trailing', False):
                 self.log_ui(f"🌊 MTF: Activando Trailing Stop de la Ola...")
-                
+
         except Exception as e:
             self.log_ui(f"❌ Fallo MTF: {e}")
             self.bitacora.registrar_error("Disparador MTF", str(e))
@@ -721,7 +1134,7 @@ class OrquestadorCentral:
             time.sleep(5)
 
     def hilo_sincronizacion_binance(self):
-        """PILAR 1: validacion periodica contra Binance cada 120s."""
+        """PILAR 1: detecta cierres SL/TP cada 30s; balance real cada 120s."""
         while True:
             try:
                 if self._en_pausa_fin_de_semana():

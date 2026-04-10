@@ -16,6 +16,13 @@ from typing import Callable, Any, Optional, Dict
 ESPERAS_REINTENTO = [0, 1, 3, 9]  # 4 intentos en total
 INTERVALO_PRIMER_REINTENTO_CICLOS = 5  # despues del 3er fallo, esperar 5 ciclos
 
+# Errores de Binance que son DETERMINÍSTICOS (no de red): no tiene sentido reintentar.
+# -2019: Margin is insufficient
+# -2011: Unknown order sent (orden ya cancelada)
+# -1013: Filter failure (precio/cantidad invalida)
+# -1111: Precision is over the maximum defined for this asset
+ERRORES_NO_REINTENTABLES = {-2019, -2011, -1013, -1111}
+
 
 class Resultado:
     """Resultado tipado de una invocacion al coordinador."""
@@ -99,6 +106,16 @@ class CoordinadorReintentos:
                         "Coordinador",
                         f"{tipo_accion} FALLO intento {intento_idx}: {ultimo_error}",
                     )
+                # Si el error es determinístico (no de red), no tiene sentido reintentar.
+                # Salimos del loop inmediatamente para ahorrar 13s de espera inútil.
+                codigo_binance = getattr(e, "code", None)
+                if codigo_binance in ERRORES_NO_REINTENTABLES:
+                    if self.bitacora:
+                        self.bitacora.registrar_diagnostico(
+                            "Coordinador",
+                            f"{tipo_accion} error determinístico ({codigo_binance}) — sin reintentos.",
+                        )
+                    break
 
         # Los 4 intentos fallaron. Marcamos PENDIENTE.
         pendiente_id = None

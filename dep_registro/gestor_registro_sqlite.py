@@ -363,3 +363,29 @@ class GestorRegistro:
                 "SELECT * FROM snapshot_cuenta ORDER BY id DESC LIMIT 1"
             ).fetchone()
         return dict(row) if row else None
+
+    def actualizar_precio_entrada(self, id_local: int, precio: float):
+        """Corrige el precio de entrada de una posicion (util cuando se guardo como 0.0)."""
+        self._verificar_rotacion()
+        with self._lock:
+            self._conexion.execute(
+                "UPDATE posiciones SET precio_entrada = ? WHERE id_local = ?",
+                (float(precio), id_local),
+            )
+
+    def cancelar_ordenes_de_posicion(self, id_posicion_local: int):
+        """
+        Marca como CANCELADA todas las ordenes NUEVA/ACEPTADA de una posicion.
+        Se llama cuando la posicion es cerrada por SL o TP para limpiar el estado.
+        """
+        self._verificar_rotacion()
+        with self._lock:
+            self._conexion.execute(
+                """
+                UPDATE ordenes
+                   SET estado = 'CANCELADA'
+                 WHERE id_posicion_local = ?
+                   AND estado IN ('NUEVA', 'ACEPTADA')
+                """,
+                (id_posicion_local,),
+            )

@@ -87,13 +87,26 @@ class DisparadorBinance:
         # PILAR 1: persistir en SQLite
         if self.registro is not None and respuesta:
             try:
+                # Para ordenes MARKET, Binance devuelve avgPrice con el precio real de llenado.
+                # Si se usa precio=None (MARKET), precio seria 0.0 sin esta correccion.
+                precio_fill = float(respuesta.get("avgPrice") or 0.0)
+                if precio_fill == 0.0 and precio:
+                    precio_fill = float(precio)
+
                 id_posicion_local = self.registro.crear_posicion(
                     symbol=symbol.upper(),
                     direccion=position_side,
-                    precio_entrada=float(precio) if precio else 0.0,
+                    precio_entrada=precio_fill,
                     cantidad=qty_redondeada,
                     estrategia_origen=estrategia_origen,
-                    estado="PENDIENTE",  # se promueve a ACTIVA cuando llene
+                    estado="PENDIENTE",
+                )
+                # Marcar inmediatamente como ACTIVA — la orden MARKET se llena
+                # en el mismo instante. Sin este paso, obtener_posiciones_abiertas()
+                # no la ve y los guards de "posicion activa" fallan.
+                self.registro.marcar_posicion_activa(
+                    id_posicion_local,
+                    str(respuesta.get("orderId"))
                 )
                 self.registro.registrar_orden(
                     tipo="ENTRADA",

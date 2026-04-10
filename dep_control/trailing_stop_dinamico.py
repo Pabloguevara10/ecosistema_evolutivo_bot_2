@@ -97,6 +97,32 @@ class ControladorDinamico:
             except Exception:
                 pass
 
+        # FALLBACK: si SQLite no tiene el ID (registro silencioso fallido),
+        # consultar Binance directamente para no dejar ordenes huerfanas.
+        if id_orden_anterior_binance is None:
+            try:
+                ordenes_abiertas = self.client.futures_get_open_orders(symbol=symbol)
+                for o in ordenes_abiertas:
+                    if (str(o.get("type", "")).upper() == "STOP_MARKET" and
+                            str(o.get("positionSide", "")).upper() == position_side.upper() and
+                            str(o.get("side", "")).upper() == side_orden.upper()):
+                        id_orden_anterior_binance = str(o["orderId"])
+                        # No tenemos id_local porque no estaba en SQLite
+                        id_orden_anterior_local = None
+                        if self.bitacora:
+                            self.bitacora.registrar_diagnostico(
+                                "Control_Trailing",
+                                f"ID de SL obtenido de Binance (no estaba en SQLite): "
+                                f"{id_orden_anterior_binance}"
+                            )
+                        break
+            except Exception as e:
+                if self.bitacora:
+                    self.bitacora.registrar_error(
+                        "Control_Trailing",
+                        f"Fallback Binance para SL anterior fallo: {e}"
+                    )
+
         # Si no tenemos modificador seguro, no podemos respetar el Pilar 3.
         # En ese caso bailamos out con un log fuerte para que se vea.
         if self.modificador is None:
