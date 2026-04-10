@@ -84,6 +84,19 @@ class BitacoraCentral:
         self.logger_operaciones.info(mensaje)
 
 
+    # ===============================================================
+    # REPORTE AUXILIAR: EVENTOS DE PROCESO PENDIENTE (auditoria cruzada)
+    # ===============================================================
+    def registrar_pendiente(self, tipo_accion: str, detalles: str, estado: str = "PENDIENTE"):
+        """
+        Registra en la bitacora de actividad cada cambio de estado de un proceso pendiente.
+        Complementa el SQLite con un rastro de texto legible.
+        """
+        self.logger_actividad.info(
+            f"[PENDIENTE/{estado}] | ACCION: {tipo_accion} | DETALLE: {detalles}"
+        )
+
+
 if __name__ == "__main__":
     # Prueba local del sistema de logs. Ejecuta este archivo directamente para probar.
     bitacora = BitacoraCentral()
